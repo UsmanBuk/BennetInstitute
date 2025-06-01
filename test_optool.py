@@ -8,7 +8,10 @@ from optool import (
     get_spending_data,
     find_top_prescriber_by_month,
     find_top_prescriber_by_month_weighted,
-    get_icb_list_sizes
+    get_icb_list_sizes,
+    InvalidInputError,  # Import the custom exception
+    APIError,
+    DataNotFoundError
 )
 
 # Test data fixtures
@@ -115,7 +118,7 @@ class TestExtractChemicalCode:
     
     def test_invalid_length(self):
         """Test error raised for invalid BNF code length."""
-        with pytest.raises(ValueError, match="BNF code must be exactly 15 characters"):
+        with pytest.raises(InvalidInputError, match="BNF code must be exactly 15 characters"):
             extract_chemical_code("12345")
 
 # Tests for check_code_exists
@@ -170,7 +173,7 @@ class TestGetChemicalName:
         mock_response.raise_for_status.return_value = None
         mock_get.return_value = mock_response
         
-        with pytest.raises(Exception, match="No data found for chemical code"):
+        with pytest.raises(DataNotFoundError, match="No data found for chemical code"):
             get_chemical_name("0101010G0")
     
     @patch('requests.get')
@@ -181,7 +184,7 @@ class TestGetChemicalName:
         mock_response.raise_for_status.return_value = None
         mock_get.return_value = mock_response
         
-        with pytest.raises(Exception, match="No exact match found for chemical code"):
+        with pytest.raises(DataNotFoundError, match="No exact match found for chemical code"):
             get_chemical_name("0101010G0")
     
     @patch('requests.get')
@@ -189,7 +192,7 @@ class TestGetChemicalName:
         """Test handling of API request errors."""
         mock_get.side_effect = requests.RequestException("Connection error")
         
-        with pytest.raises(Exception, match="Failed to fetch data from API"):
+        with pytest.raises(APIError, match="Failed to fetch data from API"):
             get_chemical_name("0101010G0")
 
 # Tests for get_spending_data
@@ -223,7 +226,7 @@ class TestGetSpendingData:
         """Test handling of API errors."""
         mock_get.side_effect = requests.RequestException("API Error")
         
-        with pytest.raises(Exception, match="Failed to fetch spending data from API"):
+        with pytest.raises(APIError, match="Failed to fetch spending data from API"):
             get_spending_data("0101010G0")
 
 # Tests for find_top_prescriber_by_month
@@ -335,7 +338,7 @@ class TestGetIcbListSizes:
         ]
         success_response.raise_for_status.return_value = None
         
-        def side_effect(url):
+        def side_effect(url, **kwargs):  # Accept keyword arguments
             if "2023-01" in url:
                 return success_response
             else:
@@ -377,4 +380,4 @@ class TestGetIcbListSizes:
         assert all(result[date]["ICB001"] == 500000 for date in dates)
         
         # Should only make one API call
-        assert mock_get.call_count == 1 
+        assert mock_get.call_count == 1

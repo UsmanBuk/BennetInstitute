@@ -4,6 +4,15 @@ OpenPrescribing command-line tool for retrieving drug information.
 
 This tool uses the OpenPrescribing API to look up chemical substance names
 from BNF codes and analyze prescribing data by ICB.
+
+Production Considerations:
+- Add structured logging (e.g., using Python's logging module)
+- Implement retry logic with exponential backoff for API failures
+- Add response caching to reduce API calls and improve performance
+- Respect rate limiting (check API documentation for limits)
+- Add monitoring/alerting for API failures
+- Consider using async requests for parallel API calls
+- Add circuit breaker pattern for API resilience
 """
 
 import sys
@@ -11,6 +20,41 @@ import requests
 import argparse
 from datetime import datetime
 from collections import defaultdict
+
+
+# Configuration Constants
+API_BASE_URL = "https://openprescribing.net/api/1.0"
+API_TIMEOUT = 30  # seconds
+BNF_CODE_LENGTH = 15
+CHEMICAL_CODE_LENGTH = 9
+CHEMICAL_CODE_ALT_LENGTH = 7  # Alternative length for edge cases
+MAX_RETRIES = 3
+RETRY_DELAY = 1  # seconds
+
+# TODO: In production, these would come from environment variables or config file
+# API_KEY = os.environ.get('OPENPRESCRIBING_API_KEY')
+# CACHE_TTL = int(os.environ.get('CACHE_TTL', 3600))
+
+
+# Custom Exceptions
+class OptoolError(Exception):
+    """Base exception for optool"""
+    pass
+
+
+class APIError(OptoolError):
+    """Raised when API requests fail"""
+    pass
+
+
+class DataNotFoundError(OptoolError):
+    """Raised when expected data is not found"""
+    pass
+
+
+class InvalidInputError(OptoolError):
+    """Raised when input validation fails"""
+    pass
 
 
 def extract_chemical_code(bnf_code):
@@ -26,19 +70,28 @@ def extract_chemical_code(bnf_code):
         
     Returns:
         str: The chemical substance code
+        
+    Raises:
+        InvalidInputError: If BNF code is not exactly 15 characters
     """
-    if len(bnf_code) != 15:
-        raise ValueError(f"BNF code must be exactly 15 characters, got {len(bnf_code)}")
+    if len(bnf_code) != BNF_CODE_LENGTH:
+        raise InvalidInputError(
+            f"BNF code must be exactly {BNF_CODE_LENGTH} characters, got {len(bnf_code)}"
+        )
     
+    # TODO: In production, consider caching the results of check_code_exists
+    # to avoid repeated API calls for the same codes
     
-    for length in [9, 7]:
+    # Try different lengths to handle edge cases
+    for length in [CHEMICAL_CODE_LENGTH, CHEMICAL_CODE_ALT_LENGTH]:
         chemical_code = bnf_code[:length]
         # Quick check if this code exists in the API
         if check_code_exists(chemical_code):
             return chemical_code
     
-    # If no match found, default to 9 characters
-    return bnf_code[:9]
+    # If no match found, default to standard length
+    # TODO: Log this scenario for monitoring unusual BNF codes
+    return bnf_code[:CHEMICAL_CODE_LENGTH]
 
 
 def check_code_exists(code):
@@ -50,11 +103,15 @@ def check_code_exists(code):
         
     Returns:
         bool: True if the code exists, False otherwise
+        
+    TODO: In production:
+    - Implement caching to avoid repeated lookups
+    - Add metrics/monitoring for API response times
     """
-    api_url = f"https://openprescribing.net/api/1.0/bnf_code/?format=json&exact=true&param={code}"
+    api_url = f"{API_BASE_URL}/bnf_code/?format=json&exact=true&param={code}"
     
     try:
-        response = requests.get(api_url)
+        response = requests.get(api_url, timeout=API_TIMEOUT)
         response.raise_for_status()
         data = response.json()
         
@@ -63,7 +120,9 @@ def check_code_exists(code):
             if item.get('id') == code:
                 return True
         return False
-    except:
+    except requests.RequestException:
+        # TODO: In production, log the specific error for debugging
+        # For now, assume code doesn't exist if we can't check
         return False
 
 
@@ -78,18 +137,20 @@ def get_chemical_name(chemical_code):
         str: The name of the chemical substance
         
     Raises:
-        Exception: If the API request fails or returns unexpected data
+        APIError: If the API request fails
+        DataNotFoundError: If no data found for the chemical code
     """
-    api_url = f"https://openprescribing.net/api/1.0/bnf_code/?format=json&exact=true&q={chemical_code}"
+    api_url = f"{API_BASE_URL}/bnf_code/?format=json&exact=true&q={chemical_code}"
     
     try:
-        response = requests.get(api_url)
+        # TODO: In production, implement retry logic with exponential backoff
+        response = requests.get(api_url, timeout=API_TIMEOUT)
         response.raise_for_status()
         
         data = response.json()
         
         if not data:
-            raise ValueError(f"No data found for chemical code {chemical_code}")
+            raise DataNotFoundError(f"No data found for chemical code {chemical_code}")
         
         # The API returns a list of matching codes
         # We're looking for an exact match
@@ -98,12 +159,13 @@ def get_chemical_name(chemical_code):
                 return item.get('name', 'Unknown chemical')
         
         # If no exact match found, raise an error
-        raise ValueError(f"No exact match found for chemical code {chemical_code}")
+        raise DataNotFoundError(f"No exact match found for chemical code {chemical_code}")
         
     except requests.RequestException as e:
-        raise Exception(f"Failed to fetch data from API: {e}")
+        # TODO: In production, log full stack trace and request details
+        raise APIError(f"Failed to fetch data from API: {e}")
     except ValueError as e:
-        raise Exception(f"Failed to parse API response: {e}")
+        raise APIError(f"Failed to parse API response: {e}")
 
 
 def get_spending_data(chemical_code):
@@ -117,12 +179,17 @@ def get_spending_data(chemical_code):
         dict: Dictionary mapping dates to ICB spending data
         
     Raises:
-        Exception: If the API request fails
+        APIError: If the API request fails
+        
+    TODO: In production:
+    - Implement pagination if API supports it
+    - Add progress indicator for long-running requests
+    - Consider streaming response for large datasets
     """
-    api_url = f"https://openprescribing.net/api/1.0/spending_by_org/?format=json&org_type=icb&code={chemical_code}"
+    api_url = f"{API_BASE_URL}/spending_by_org/?format=json&org_type=icb&code={chemical_code}"
     
     try:
-        response = requests.get(api_url)
+        response = requests.get(api_url, timeout=API_TIMEOUT)
         response.raise_for_status()
         
         data = response.json()
@@ -144,7 +211,7 @@ def get_spending_data(chemical_code):
         return dict(spending_by_date)
         
     except requests.RequestException as e:
-        raise Exception(f"Failed to fetch spending data from API: {e}")
+        raise APIError(f"Failed to fetch spending data from API: {e}")
 
 
 def find_top_prescriber_by_month(spending_data):
@@ -184,6 +251,11 @@ def get_icb_list_sizes(org_ids, dates):
         
     Returns:
         dict: Nested dictionary {date: {org_id: total_list_size}}
+        
+    TODO: In production:
+    - Implement bulk fetching if API supports it
+    - Add caching with appropriate TTL
+    - Consider using async requests for parallel fetching
     """
     list_sizes = defaultdict(dict)
     
@@ -197,10 +269,10 @@ def get_icb_list_sizes(org_ids, dates):
     
     for year_month in unique_months:
         # Query for all ICBs for this month
-        api_url = f"https://openprescribing.net/api/1.0/org_details/?format=json&org_type=icb&keys=total_list_size&date={year_month}-01"
+        api_url = f"{API_BASE_URL}/org_details/?format=json&org_type=icb&keys=total_list_size&date={year_month}-01"
         
         try:
-            response = requests.get(api_url)
+            response = requests.get(api_url, timeout=API_TIMEOUT)
             response.raise_for_status()
             
             data = response.json()
@@ -216,6 +288,7 @@ def get_icb_list_sizes(org_ids, dates):
                             
         except requests.RequestException as e:
             # Continue with partial data if some requests fail
+            # TODO: In production, log this error and track partial failures
             print(f"Warning: Failed to fetch list sizes for {year_month}: {e}", file=sys.stderr)
             continue  # Skip this month and try the next one
     
@@ -266,7 +339,15 @@ def find_top_prescriber_by_month_weighted(spending_data, list_sizes):
 
 
 def main():
-    """Main function to handle command-line arguments and execute the tool."""
+    """
+    Main function to handle command-line arguments and execute the tool.
+    
+    TODO: In production:
+    - Add verbose/debug flags for different logging levels
+    - Add output format options (JSON, CSV, etc.)
+    - Add date range filtering options
+    - Consider adding a --dry-run option
+    """
     parser = argparse.ArgumentParser(
         description="Look up chemical substance names from BNF codes using the OpenPrescribing API"
     )
@@ -279,6 +360,11 @@ def main():
         action="store_true",
         help="Weight results by population size (items per patient)"
     )
+    
+    # TODO: In production, add these arguments:
+    # parser.add_argument("--cache", action="store_true", help="Enable response caching")
+    # parser.add_argument("--timeout", type=int, default=30, help="API timeout in seconds")
+    # parser.add_argument("--format", choices=['text', 'json', 'csv'], default='text')
     
     args = parser.parse_args()
     
@@ -324,8 +410,23 @@ def main():
         for date, icb_name in top_prescribers:
             print(f"{date} {icb_name}")
         
+    except InvalidInputError as e:
+        # User input errors should be friendly
+        print(f"Invalid input: {e}", file=sys.stderr)
+        sys.exit(1)
+    except DataNotFoundError as e:
+        # Data not found is a valid scenario
+        print(f"Data not found: {e}", file=sys.stderr)
+        sys.exit(1)
+    except APIError as e:
+        # API errors might be temporary
+        print(f"API Error: {e}", file=sys.stderr)
+        print("Please try again later or contact support if the problem persists.", file=sys.stderr)
+        sys.exit(1)
     except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
+        # Unexpected errors
+        # TODO: In production, log full stack trace
+        print(f"Unexpected error: {e}", file=sys.stderr)
         sys.exit(1)
 
 

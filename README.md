@@ -1,152 +1,157 @@
-# OpenPrescribing Command-Line Tool
+# OpenPrescribing Tool
 
-A command-line tool that uses the OpenPrescribing API to retrieve information about prescribing of particular drugs and analyze prescribing patterns across England.
+A command-line tool that uses the OpenPrescribing API to retrieve information about prescribing of particular drugs and calculate how this varies around the country.
+
+## Features
+
+- Look up chemical substance names from BNF (British National Formulary) codes
+- Analyze prescribing data by ICB (Integrated Care Board)
+- Find the ICB with the highest prescribing rate for a given chemical each month
+- Optional population-weighted analysis to account for different ICB sizes
 
 ## Installation
 
 ### Prerequisites
-- Python 3.6 or higher
-- pip (Python package installer)
+
+- Python 3.7 or higher
+- pip package manager
 
 ### Dependencies
-Install the required dependencies using pip:
+
+Install the required packages:
+
+```bash
+pip install -r requirements.txt
+```
+
+Or install manually:
 
 ```bash
 pip install requests
 ```
 
-### Setup
-Make the script executable:
+### Development Dependencies
+
+For running tests:
 
 ```bash
-chmod +x optool.py
+pip install pytest
 ```
 
 ## Usage
 
-### Part 1 & 2: Chemical name and ICB prescribing data
+### Basic Usage
 
-The tool takes a full 15-character BNF code and:
-1. Returns the name of the chemical substance
-2. Shows which ICB prescribed the most of this chemical each month
+Look up a chemical name and find top prescribing ICBs:
 
 ```bash
 python optool.py 1304000H0AAAAAA
 ```
 
-or if you've made it executable:
-
-```bash
-./optool.py 1304000H0AAAAAA
-```
-
-Expected output:
+Output:
 ```
 Clobetasone butyrate
 
 2024-01-01 NHS GREATER MANCHESTER INTEGRATED CARE BOARD
 2024-02-01 NHS NORTH EAST AND NORTH CUMBRIA INTEGRATED CARE BOARD
-2024-03-01 NHS GREATER MANCHESTER INTEGRATED CARE BOARD
 ...
 ```
 
-### Part 3: Weighted by population
+### Population-Weighted Analysis
 
-To weight the results by population size (items per patient), use the `--weighted` flag:
+To weight results by ICB population size (items per patient):
 
 ```bash
 python optool.py --weighted 1304000H0AAAAAA
 ```
 
-Expected output:
-```
-Clobetasone butyrate
+This provides a more accurate comparison by accounting for the different numbers of patients in each ICB.
 
-2024-01-01 NHS DEVON INTEGRATED CARE BOARD
-2024-02-01 NHS DEVON INTEGRATED CARE BOARD
-2024-03-01 NHS DEVON INTEGRATED CARE BOARD
-...
-```
+### Example BNF Codes
 
-With the weighted option, the tool calculates the prescribing rate per patient for each ICB, taking into account the different population sizes.
+You can test the tool with these example codes:
+- `1304000H0AAAAAA` - Clobetasone butyrate
+- `0212000AAAAAIAI` - Atenolol
+- `0407010ADBCAAAB` - Paracetamol
+- `0301020I0BBAFAF` - Salbutamol
+- `040702040BEABAC` - Morphine
 
-## Running Tests
+## Code Structure
 
-Run the test suite using:
+### Main Components
+
+- **`extract_chemical_code()`**: Extracts the chemical substance code from a full 15-character BNF code
+- **`get_chemical_name()`**: Queries the OpenPrescribing API to retrieve the chemical name
+- **`get_spending_data()`**: Fetches prescribing data for all ICBs over the available time period
+- **`find_top_prescriber_by_month()`**: Identifies the ICB with the highest number of items prescribed each month
+- **`find_top_prescriber_by_month_weighted()`**: Calculates prescribing rates per patient using ICB population data
+- **`get_icb_list_sizes()`**: Retrieves population (list size) data for ICBs to enable weighted analysis
+
+### Error Handling
+
+The tool includes custom exceptions for different error scenarios:
+- `InvalidInputError`: For invalid BNF codes
+- `DataNotFoundError`: When requested data doesn't exist
+- `APIError`: For API communication failures
+
+## Design Decisions
+
+### Chemical Code Extraction
+
+The tool attempts to extract chemical codes using both 9 and 7 character lengths. According to BNF structure, the chemical code is typically the first 9 characters, but we check both lengths to handle edge cases. This approach ensures compatibility with various BNF code formats.
+
+### API Error Handling
+
+The tool implements graceful error handling with user-friendly messages. API failures are caught and reported clearly, with the tool continuing to process partial data where possible (e.g., if some monthly data fails to load).
+
+### Population Weighting
+
+The weighted analysis fetches list sizes for each month separately, as ICB populations can change over time. This ensures accurate per-patient calculations even as populations shift.
+
+### Performance Considerations
+
+- API calls are made with appropriate timeouts to prevent hanging
+- The tool processes data efficiently using dictionaries for O(1) lookups
+- Error handling allows partial data processing to continue when some API calls fail
+
+## Testing
+
+Run the test suite:
 
 ```bash
-python -m unittest test_optool.py
+pytest test_optool.py
 ```
 
 For verbose output:
 
 ```bash
-python -m unittest test_optool.py -v
+pytest -v test_optool.py
 ```
 
-## Code Structure
+The test suite includes:
+- Unit tests for all major functions
+- Mock API responses to test without network dependencies
+- Edge case handling (empty data, ties, missing data)
+- Error condition testing
 
-The tool is organized into the following main functions:
+## Production Considerations
 
-1. **`extract_chemical_code(bnf_code)`**: Extracts the 9-character chemical substance code from the full 15-character BNF code. According to the BNF code structure, the chemical code is the first 9 characters.
+This tool is designed as a prototype. For production use, consider:
 
-2. **`get_chemical_name(chemical_code)`**: Makes an API call to the OpenPrescribing API to retrieve the name of the chemical substance. It uses the `bnf_code` endpoint with exact matching to ensure we get the correct chemical.
+- **Caching**: Implement response caching to reduce API load
+- **Retry Logic**: Add exponential backoff for failed requests
+- **Logging**: Replace print statements with structured logging
+- **Configuration**: Move API URLs and timeouts to environment variables
+- **Rate Limiting**: Respect API rate limits with appropriate delays
+- **Async Operations**: Consider parallel API calls for better performance
+- **Monitoring**: Add metrics and alerting for API failures
 
-3. **`get_spending_data(chemical_code)`**: Retrieves spending data for the chemical across all ICBs over the last 5 years using the `spending_by_org` endpoint.
+## API Documentation
 
-4. **`find_top_prescriber_by_month(spending_data)`**: Analyzes the spending data to find which ICB prescribed the most items of the chemical for each month.
+This tool uses the OpenPrescribing API. For more information:
+- API Documentation: https://openprescribing.net/api/
+- BNF Code Structure: https://www.bennett.ox.ac.uk/blog/2017/04/prescribing-data-bnf-codes/
 
-5. **`get_icb_list_sizes(org_ids, dates)`**: Retrieves the total list size (patient population) for ICBs for specific months using the `org_details` endpoint.
+## License
 
-6. **`find_top_prescriber_by_month_weighted(spending_data, list_sizes)`**: Calculates items per patient for each ICB and finds the one with the highest rate for each month.
-
-7. **`main()`**: The entry point that handles command-line arguments, orchestrates the workflow, and provides error handling.
-
-## Design Decisions
-
-### Error Handling
-- **Input validation**: The tool validates that the BNF code is exactly 15 characters before processing.
-- **API errors**: Network errors and API failures are caught and reported with user-friendly error messages.
-- **Data validation**: The tool checks for exact matches in the API response to ensure accuracy.
-
-### API Integration
-- Used the `q` parameter (not `param`) as specified in the API documentation.
-- For Part 1: Uses the `bnf_code` endpoint with `exact=true` to find the chemical name.
-- For Part 2: Uses the `spending_by_org` endpoint with `org_type=icb` to get ICB-level data.
-
-### Data Processing
-- Spending data is organized by date for efficient processing.
-- When there's a tie in the number of items prescribed, the first ICB in the API response is selected (as specified in the requirements).
-- Results are sorted chronologically for easy reading.
-- For weighted calculations:
-  - The tool fetches total list sizes for each ICB for each month
-  - Calculates items per patient (items / total_list_size)
-  - Handles edge cases where list size might be 0 or unavailable
-  - List sizes are fetched month by month as they change over time
-
-### User Experience
-- Clear error messages are provided to stderr when things go wrong.
-- The tool exits with code 1 on error and 0 on success, following Unix conventions.
-- Output format follows the specification exactly, with the chemical name followed by a blank line and then the monthly ICB data.
-
-### Testing Strategy
-- Unit tests cover the core functionality including:
-  - BNF code validation and extraction
-  - API integration with mocked responses
-  - Spending data processing
-  - Top prescriber identification
-  - Error handling scenarios
-  - End-to-end command-line interface testing
-
-### Code Style
-- Clear function names and comprehensive docstrings
-- Follows PEP 8 style guidelines
-- Modular design allows easy extension for Part 3
-
-## Example BNF Codes for Testing
-
-- `1304000H0AAAAAA` - Clobetasone butyrate
-- `0212000AAAAAIAI` - Rosuvastatin calcium
-- `0407010ADBCAAAB` - Paracetamol and ibuprofen
-- `0301020I0BBAFAF` - Ipratropium bromide
-- `040702040BEABAC` - Tramadol hydrochloride
+This project was created as part of a coding assessment for the Bennett Institute.
